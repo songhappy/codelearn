@@ -42,7 +42,7 @@ if __name__ == '__main__':
 
     model2 = SimplifiedLLaMAModel(embed_size, num_layers, num_heads, ff_hidden_size, vocab_size, max_length, dropout)
     opt_model2 = torch.compile(model2)
-    model2.to(device)
+    opt_model2.to(device)
 
     model3 = SimplifiedLLaMAModel(embed_size, num_layers, num_heads, ff_hidden_size, vocab_size, max_length, dropout)
     model3.to(device)
