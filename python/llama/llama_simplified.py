@@ -146,6 +146,7 @@ def train(model, dataloader, optimizer, criterion, device):
         # Backpropagation and optimization step
         loss.backward()
         optimizer.step()
+        torch.xpu.synchronize()
 
         epoch_loss += loss.item()
 
