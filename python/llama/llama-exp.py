@@ -1,80 +1,58 @@
 from transformers import LlamaForCausalLM, LlamaTokenizer
 import torch
-from ipex_llm.transformers import AutoModelForCausalLM
+import torch.ao.quantization as quantization
 
-# Load pre-trained model and tokenizer
-model_name = "/home/arda/intelWork/models/Llama-2-7b-chat-hf"  # Replace with the actual name of LLaMA 7B model from Hugging Face if different
-tokenizer = LlamaTokenizer.from_pretrained(model_name)
-# model = LlamaForCausalLM.from_pretrained(model_name, load_in_4bit=True)
-model = AutoModelForCausalLM.from_pretrained(model_name, load_in_4bit=True)
+# Local path where you downloaded the model
+model_path = "/mnt/models/Llama-2-7b-hf"
 
-# Move model to GPU if available
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.to(device)
+# Load tokenizer
+tokenizer = LlamaTokenizer.from_pretrained(model_path)
 
-# Example input text
-input_text = "Once upon a time in a faraway land, there was a"
+# Load model, forcing it to accept the bin format
+model = LlamaForCausalLM.from_pretrained(
+    model_path,
+    torch_dtype=torch.float16,  # Adjust based on available resources
+    device_map="auto",
+    low_cpu_mem_usage=True,  # Helps with large models
+    use_safetensors=False
+)
 
-# Tokenize input text
-inputs = tokenizer(input_text, return_tensors="pt").to(device)
+model = model.to("xpu")
+# Example prompt
+prompt = "Once upon a time in a futuristic city,"
+inputs = tokenizer(prompt, return_tensors="pt").to("xpu")
 
-# Generate output (text continuation)
-# output_tokens = model.generate(inputs["input_ids"], max_length=50, num_return_sequences=1)
+# Generate text
+with torch.no_grad():
+    output = model.generate(**inputs, max_length=100)
 
-# # Decode and print the generated text
-# generated_text = tokenizer.decode(output_tokens[0], skip_special_tokens=True)
-# print(generated_text)
+# Decode output
+generated_text = tokenizer.decode(output[0], skip_special_tokens=True)
+print(generated_text)
 
 
-# from transformers import LlamaForCausalLM, LlamaTokenizer
-# import torch
+# Apply dynamic quantization (reduces memory and speeds up inference on CPU)
+quantized_model = quantization.quantize_dynamic(
+    model,
+    {torch.nn.Linear},  # Target Linear layers for quantization
+    dtype=torch.qint8  # Convert to int8 for efficiency
+)
 
-# # Step 1: Load the pre-trained model and tokenizer
-# tokenizer = LlamaTokenizer.from_pretrained(model_name)
-# model = LlamaForCausalLM.from_pretrained(model_name)
+# Example prompt
+prompt = "Once upon a time in a futuristic city,"
+inputs = tokenizer(prompt, return_tensors="pt")
 
-# # Move the model to GPU if available
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# model.to(device)
+# Generate text using the quantized model
+with torch.no_grad():
+    output = quantized_model.generate(
+        **inputs,
+        max_length=100,  # Control output length
+        temperature=0.7,  # Adjust creativity
+        top_p=0.9,  # Nucleus sampling
+        repetition_penalty=1.1  # Reduce repetition
+    )
 
-# Step 2: Provide input text and tokenize
-input_text = "The future of AI is"
-inputs = tokenizer(input_text, return_tensors="pt").to(device)
+# Decode and print the output
+generated_text = tokenizer.decode(output[0], skip_special_tokens=True)
+print(generated_text)
 
-# Initialize the generated sequence with the input_ids
-generated = inputs["input_ids"]
-
-# Set the maximum length of the sequence to generate
-max_length = 15
-
-# Loop until the desired length is reached
-for _ in range(max_length - inputs["input_ids"].shape[1]):
-    # Step 3: Pass the current sequence through the model
-    with torch.no_grad():
-        outputs = model(generated)
-    
-    # Step 4: Extract logits and apply greedy search (select the token with the highest probability)
-    print("outputs.logits.shape", outputs.logits.shape)
-    next_token_logits = outputs.logits[:, -1, :]  # Get logits of the last token in the sequence
-    next_token = torch.argmax(next_token_logits, dim=-1)  # Greedy: take the highest probability token
-    
-    print("next_token", next_token)
-    print("next_token.shape", next_token.shape)
-    # Append the predicted next token to the sequence
-    generated = torch.cat((generated, next_token.unsqueeze(0)), dim=1)
-    print("generated", generated)
-    print("generated.shape", generated.shape)
-
-    # Stop generation if the model outputs the end-of-sequence token (optional, based on LLaMA tokenizer)
-    if next_token.item() == tokenizer.eos_token_id:
-        break
-
-# Step 5: Decode the generated sequence into text
-generated_text = tokenizer.decode(generated[0], skip_special_tokens=True)
-
-# Tokenize the generated text into words
-words = generated_text.split()
-
-# Output the result
-print(f"Generated Text: {generated_text}")
-print(f"Tokenized Words: {words}")

@@ -153,7 +153,7 @@ class DeepSeekV3(nn.Module):
 
 
 # Set device
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("xpu" if torch.xpu.is_available() else "cpu")
 
 # Define model parameters
 vocab_size = 100  # Small vocabulary for demo

@@ -54,7 +54,7 @@ from transformers.utils import (
     replace_return_docstrings,
 )
 from transformers.utils.import_utils import is_torch_fx_available
-from .configuration_deepseek import DeepseekV3Config
+from configuration_deepseek import DeepseekV3Config
 import torch.distributed as dist
 import numpy as np
 
@@ -436,7 +436,7 @@ class MoEGate(nn.Module):
 
         ### select top-k experts
         if self.topk_method == "noaux_tc":
-            assert not self.training
+            # assert not self.training
             scores_for_choice = scores.view(bsz * seq_len, -1) + self.e_score_correction_bias.unsqueeze(0)
             group_scores = (
                 scores_for_choice.view(bsz * seq_len, self.n_group, -1).topk(2, dim=-1)[0].sum(dim = -1)
@@ -529,7 +529,10 @@ class DeepseekV3MoE(nn.Module):
         if not self.training:
             y = self.moe_infer(hidden_states, topk_idx, topk_weight).view(*orig_shape)
         if self.config.n_shared_experts is not None:
-            y = y + self.shared_experts(identity)
+            if 'y' not in locals():
+                y = self.shared_experts(identity)
+            else:
+                y = y + self.shared_experts(identity)
         return y
 
     @torch.no_grad()

@@ -28,6 +28,7 @@ class MultiHeadSelfAttention(nn.Module):
         N = query.shape[0]  # Batch size
         value_len, key_len, query_len = values.shape[1], keys.shape[1], query.shape[1]
 
+
         # Apply the linear projections to get values, keys, and queries
         values = self.v_proj(values)  # Shape: (N, value_len, embed_size)
         keys = self.k_proj(keys)        # Shape: (N, key_len, embed_size)
