@@ -36,7 +36,9 @@ def train(rank, world_size, distributed):
 
     # Profiler setup
     prof = profile(
-        activities=[ProfilerActivity.CPU, ProfilerActivity.XPU],
+        activities=[ProfilerActivity.XPU,
+                    ProfilerActivity.CPU,
+                    ],
         on_trace_ready=tensorboard_trace_handler(f'./log/rank{rank}'),
         record_shapes=True,
         profile_memory=True,

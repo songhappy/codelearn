@@ -4,8 +4,9 @@ import torch
 import torch.nn as nn
 import torch.distributed as dist
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
-# from torch.distributed._composable.fsdp import fully_shard
-from torch.distributed.fsdp import fully_shard 
+import gc
+from torch.distributed._composable.fsdp import fully_shard
+# from torch.distributed.fsdp import fully_shard 
 
 # Dummy dataset
 class DummyDataset(torch.utils.data.Dataset):
@@ -39,6 +40,7 @@ def train(local_rank, world_size, distributed=False):
     model = SmallModel().to(device)
 
     if distributed:
+        dist.barrier()
         rank = dist.get_rank()
         print(rank)
         # Define a simple example condition: shard all Linear layers
@@ -68,8 +70,17 @@ def train(local_rank, world_size, distributed=False):
             optimizer.zero_grad()
             output = model(x)
             loss = loss_fn(output, y)
+            print("before loss.backward")
+            gc.collect()
+            torch.xpu.empty_cache()
             loss.backward()
+            print("after loss.backward")
+            gc.collect()
+            torch.xpu.empty_cache()
             optimizer.step()
+            print("after optimizer.step")
+            gc.collect()
+            torch.xpu.empty_cache()
         if not distributed or local_rank == 0:
             print(f"[Rank {local_rank}] Epoch {epoch+1}, Loss: {loss.item():.4f}")
 

@@ -27,6 +27,14 @@ def get_memo():
     peak_memory_reserved = torch_device.max_memory_reserved(device) / _BYTES_IN_GIB
     return (time.time(), peak_memory_active, peak_memory_alloc, peak_memory_reserved)
 
+import psutil
+import os
+import time
+def print_memory(msg):
+    pid = os.getpid()
+    py = psutil.Process(pid)
+    memory_use = py.memory_info()[0] / 2. ** 30
+    _log.info(msg + f' {pid} used memory: {memory_use:.2f} GB')
 
 # Initialize ResNet50
 model = models.resnet50().to(device)
