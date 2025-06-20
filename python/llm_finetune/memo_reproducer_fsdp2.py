@@ -27,12 +27,13 @@ class SimpleModel(nn.Module):
 device_type, backend, torch_device = get_device_bkd()
 
 def setup_distributed():
-    rank = int(os.environ["RANK"])
+    rank = int(os.environ["LOCAL_RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
     dist.init_process_group(backend, rank=rank, world_size=world_size)
     if device_type in ["xpu", "cuda"]:
-        torch_device.set_device(rank)
-        return rank, torch.device(f"{device_type}:{rank}")
+        device = torch.device(f"{device_type}:{rank}")
+        torch_device.set_device(device)
+        return rank, device
     return rank, torch_device
 
 
