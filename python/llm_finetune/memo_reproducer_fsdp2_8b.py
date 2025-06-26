@@ -28,27 +28,6 @@ else:
     backend = "gloo"
     device_type = "cpu"
 
-def clean_cache():
-    """
-    Clean up the XPU or CUDA cache to free up memory.
-    """
-    try:
-        if torch.xpu.is_available():
-            torch.xpu.empty_cache()
-            print("XPU cache cleared.")
-        elif torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            print("CUDA cache cleared.")
-        else:
-            print("No XPU or CUDA device available to clear cache.")
-    except Exception as e:
-        print(f"Failed to clear device cache: {e}")
-
-    try:
-        collected = gc.collect()
-        print(f"GC collected {collected} unreachable objects.")
-    except Exception as e:
-        print(f"Failed to run garbage collection: {e}")
 
 # Memory print (XPU)
 def get_xpu_memory_used_from_xpu_smi(tag, device_id=0):
@@ -86,51 +65,6 @@ def get_cuda_memory_used_from_nvidia_smi(tag, device_id=0):
     except Exception as e:
         return(f"[{tag}] nvidia-smi error (device {device_id}): {e}")
 
-
-def grad_hook(param_name):
-    def hook(grad):
-        peak_reserved = torch_device.max_memory_reserved(torch_device.current_device()) / (1024**3)
-        peak_alloc = torch_device.max_memory_allocated(torch_device.current_device()) / (1024**3)
-        if device_type == "xpu":
-            torch.xpu.synchronize()
-            print(f"\n[BACKWARD] {param_name} | Reserved: {peak_reserved:.2f} GB, Allocated: {peak_alloc:.2f} GB")
-            get_xpu_memory_used_from_xpu_smi(f"BACKWARD: {param_name}")
-        elif device_type == "cuda":
-            torch.cuda.synchronize()
-            print(f"\n[BACKWARD] {param_name} | Reserved: {peak_reserved:.2f} GB, Allocated: {peak_alloc:.2f} GB")
-            get_cuda_memory_used_from_nvidia_smi(f"BACKWARD: {param_name}")
-        return grad
-    return hook
-
-
-def forward_hook(module, input, output):
-    peak_reserved = torch_device.max_memory_reserved(torch_device.current_device()) / (1024**3)
-    peak_alloc = torch_device.max_memory_allocated(torch_device.current_device()) / (1024**3)
-    if device_type == "xpu":
-        print(f"\n[FORWARD] {module.__class__.__name__} | Reserved: {peak_reserved:.2f} GB, Allocated: {peak_alloc:.2f} GB")
-        get_xpu_memory_used_from_xpu_smi(f"FORWARD: {module.__class__.__name__}")
-    elif device_type == "cuda":
-        print(f"\n[FORWARD] {module.__class__.__name__} | Reserved: {peak_reserved:.2f} GB, Allocated: {peak_alloc:.2f} GB")
-        get_cuda_memory_used_from_nvidia_smi(f"FORWARD: {module.__class__.__name__}")
-
-
-def backward_hook(name):
-    def hook(module, grad_input, grad_output):
-        peak_reserved = torch_device.max_memory_reserved(torch_device.current_device()) / (1024**3)
-        peak_allocated = torch_device.max_memory_allocated(torch_device.current_device()) / (1024**3)
-        print(f"\n[MODULE BACKWARD HOOK] {name}")
-        print(f"  grad_input shapes: {[g.shape if g is not None else None for g in grad_input]}")
-        print(f"  grad_output shapes: {[g.shape if g is not None else None for g in grad_output]}")
-        if device_type == "xpu":
-            torch.xpu.synchronize()
-            print(f"  Reserved: {peak_reserved:.2f} GB | Allocated: {peak_allocated:.2f} GB")
-            get_xpu_memory_used_from_xpu_smi(f"Backward: {module.__class__.__name__}")
-        elif device_type == "cuda":
-            torch.cuda.synchronize()
-            print(f"  Reserved: {peak_reserved:.2f} GB | Allocated: {peak_allocated:.2f} GB")
-            get_cuda_memory_used_from_nvidia_smi(f"Backward: {module.__class__.__name__}")
-
-    return hook
 
 def setup_distributed():
     rank = int(os.environ["RANK"])
@@ -179,40 +113,12 @@ def main():
     model = get_peft_model(model, lora_cfg)
     model.to(torch.bfloat16)
 
-    # for name, param in model.named_parameters():
-    #     print(f"{name}: {param.dtype}")
-
-    for name, layer in model.named_children():
-        layer.register_forward_hook(forward_hook)
-
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            param.register_hook(grad_hook(name))
-    
-    # for name, param in model.named_parameters():
-    #     if "lora_" in name and param.requires_grad:
-    #         param.register_hook(lambda grad, n=name: print(f"[✅ param hook] {n} | grad norm: {grad.norm():.4f}"))
-
-
-    # Register only on trainable LoRA modules
-    for name, module in model.named_modules():
-        is_lora = "lora_a" in name or "lora_b" in name
-        has_trainable_param = any(p.requires_grad for p in module.parameters())
-        if is_lora and has_trainable_param:
-            module.register_full_backward_hook(backward_hook(name))
-        #     print(f"Registered backward hook on trainable LoRA module: {name}")
-        # elif is_lora:
-        #     print(f"Skipped frozen LoRA module: {name}")
-        # else:    
-        #     print(f"Skipped non-LoRA module: {name}")
-
     for name, module in reversed(list(model.named_modules())):
         if isinstance(module, LlamaDecoderLayer):
             fully_shard(module)
     fully_shard(model)
-   
 
-    raw_dataset = load_dataset("tatsu-lab/alpaca", split="train[:20]")
+    raw_dataset = load_dataset("tatsu-lab/alpaca", split="train[:200]")
     tokenized_dataset = raw_dataset.map(lambda x: tokenize_prompt(x, tokenizer))
 
     sampler = DistributedSampler(tokenized_dataset, num_replicas=dist.get_world_size(), rank=rank, shuffle=True)

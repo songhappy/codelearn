@@ -1,12 +1,10 @@
-#torchrun --nproc_per_node=2 train_fsdp2.py
 import os
+import gc
 import torch
 import torch.nn as nn
 import torch.distributed as dist
-from torch.utils.data import DataLoader, Dataset, DistributedSampler
-import gc
+from torch.utils.data import DataLoader, DistributedSampler
 from torch.distributed._composable.fsdp import fully_shard
-# from torch.distributed.fsdp import fully_shard 
 
 # Dummy dataset
 class DummyDataset(torch.utils.data.Dataset):
@@ -33,17 +31,29 @@ class SmallModel(nn.Module):
     def forward(self, x):
         return self.seq(x)
 
-def train(local_rank, world_size, distributed=False):
-    device = torch.device(f"xpu:{local_rank}")
-    torch.xpu.set_device(device)
+def get_device_and_backend():
+    if torch.backends.mps.is_available():
+        return "mps", None  # Apple M1/M2
+    elif torch.cuda.is_available():
+        return "cuda", "nccl"
+    elif hasattr(torch, "xpu") and torch.xpu.is_available():
+        return "xpu", "xccl"
+    else:
+        raise RuntimeError("No supported device found (CUDA or XPU required).")
+
+def train(local_rank, world_size, distributed=False, device_type="cuda"):
+    device = torch.device(f"{device_type}:{local_rank}")
+
+    # Set device for current process
+    if device_type == "xpu":
+        torch.xpu.set_device(device)
+    elif device_type == "cuda":
+        torch.cuda.set_device(device)
 
     model = SmallModel().to(device)
 
     if distributed:
         dist.barrier()
-        rank = dist.get_rank()
-        print(rank)
-        # Define a simple example condition: shard all Linear layers
         def shard_condition(name, module):
             return isinstance(module, nn.Linear)
 
@@ -72,31 +82,44 @@ def train(local_rank, world_size, distributed=False):
             loss = loss_fn(output, y)
             print("before loss.backward")
             gc.collect()
-            torch.xpu.empty_cache()
+
+            # Clear cache depending on device
+            if device_type == "xpu":
+                torch.xpu.empty_cache()
+            elif device_type == "cuda":
+                torch.cuda.empty_cache()
+
             loss.backward()
             print("after loss.backward")
-            gc.collect()
-            torch.xpu.empty_cache()
+            if device_type == "xpu":
+                torch.xpu.empty_cache()
+            elif device_type == "cuda":
+                torch.cuda.empty_cache()
+
             optimizer.step()
             print("after optimizer.step")
-            gc.collect()
-            torch.xpu.empty_cache()
+            if device_type == "xpu":
+                torch.xpu.empty_cache()
+            elif device_type == "cuda":
+                torch.cuda.empty_cache()
+
         if not distributed or local_rank == 0:
             print(f"[Rank {local_rank}] Epoch {epoch+1}, Loss: {loss.item():.4f}")
 
 def main():
+    device_type, backend = get_device_and_backend()
+
     if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
         # Distributed mode
         rank = int(os.environ["RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
         local_rank = int(os.environ["LOCAL_RANK"])
-        dist.init_process_group(backend="xccl", rank=rank, world_size=world_size)
-        train(local_rank, world_size, distributed=True)
+        dist.init_process_group(backend=backend, rank=rank, world_size=world_size)
+        train(local_rank, world_size, distributed=True, device_type=device_type)
         dist.destroy_process_group()
     else:
-        # Single-card mode
-        print("Running in single-XPU mode")
-        train(local_rank=0, world_size=1, distributed=False)
+        print(f"Running in single-{device_type.upper()} mode")
+        train(local_rank=0, world_size=1, distributed=False, device_type=device_type)
 
 if __name__ == "__main__":
     main()

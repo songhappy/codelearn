@@ -11,7 +11,7 @@ from myutils import get_device_bkd, get_xpu_memory_used_from_xpu_smi, get_gpu_me
 class SimpleModel(nn.Module):
     def __init__(self):
         super(SimpleModel, self).__init__()
-        self.fc1 = nn.Linear(100, 256)
+        self.fc1 = nn.Linear(1000, 256)
         self.relu = nn.ReLU()
         self.fc2 = nn.Linear(256, 10)
     def forward(self, x):

@@ -67,7 +67,7 @@ def train():
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
 
     model.train()
-    for epoch in range(1):
+    for epoch in range(5):
         sampler.set_epoch(epoch)
         for step, (x_batch, y_batch) in enumerate(dataloader):
             x_batch = x_batch.to(device)
