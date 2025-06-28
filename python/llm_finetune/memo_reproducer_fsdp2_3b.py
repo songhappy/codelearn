@@ -91,7 +91,7 @@ def tokenize_prompt(example, tokenizer, max_length=512):
 def main():
     rank, device = setup_distributed()
 
-    model_path = "/lus/grand/projects/Intel/models/Llama-3.1-3B-Instruct"
+    model_path = "/home/songhappy/models/Llama-3.2-3B-Instruct"
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     tokenizer.pad_token = tokenizer.eos_token
 
