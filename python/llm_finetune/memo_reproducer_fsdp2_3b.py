@@ -91,7 +91,7 @@ def tokenize_prompt(example, tokenizer, max_length=512):
 def main():
     rank, device = setup_distributed()
 
-    model_path = "/home/songhappy/models/Llama-3.2-3B-Instruct"
+    model_path = "/lus/grand/projects/Intel/models/Llama-3.1-3B-Instruct"
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     tokenizer.pad_token = tokenizer.eos_token
 
@@ -102,15 +102,15 @@ def main():
         device_map={"": rank}
     )
 
-    lora_cfg = LoraConfig(
-        r=64,
-        lora_alpha=16,
-        target_modules=["q_proj", "v_proj"],
-        lora_dropout=0.1,
-        bias="none",
-        task_type=TaskType.CAUSAL_LM,
-    )
-    model = get_peft_model(model, lora_cfg)
+    # lora_cfg = LoraConfig(
+    #     r=64,
+    #     lora_alpha=16,
+    #     target_modules=["q_proj", "v_proj"],
+    #     lora_dropout=0.1,
+    #     bias="none",
+    #     task_type=TaskType.CAUSAL_LM,
+    # )
+    # model = get_peft_model(model, lora_cfg)
     model.to(torch.bfloat16)
 
     for name, module in reversed(list(model.named_modules())):
