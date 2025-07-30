@@ -80,28 +80,9 @@ def train(local_rank, world_size, distributed=False, device_type="cuda"):
             optimizer.zero_grad()
             output = model(x)
             loss = loss_fn(output, y)
-            print("before loss.backward")
-            gc.collect()
-
-            # Clear cache depending on device
-            if device_type == "xpu":
-                torch.xpu.empty_cache()
-            elif device_type == "cuda":
-                torch.cuda.empty_cache()
-
+           
             loss.backward()
-            print("after loss.backward")
-            if device_type == "xpu":
-                torch.xpu.empty_cache()
-            elif device_type == "cuda":
-                torch.cuda.empty_cache()
-
             optimizer.step()
-            print("after optimizer.step")
-            if device_type == "xpu":
-                torch.xpu.empty_cache()
-            elif device_type == "cuda":
-                torch.cuda.empty_cache()
 
         if not distributed or local_rank == 0:
             print(f"[Rank {local_rank}] Epoch {epoch+1}, Loss: {loss.item():.4f}")
