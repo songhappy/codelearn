@@ -49,9 +49,6 @@ def benchmark_allgather(device, sync_fn, world_size, rank, print_each=False):
     start = time.time()
     for i in range(1000):
         dist.all_gather(gathered, input_tensor)
-        sync_fn()
-        if print_each and i % 100 == 0:
-            print(f"[{rank}] all_gather iteration {i}")
     sync_fn()
     end = time.time()
 
@@ -65,9 +62,6 @@ def benchmark_reducescatter(device, sync_fn, world_size, rank, print_each=False)
     start = time.time()
     for i in range(1000):
         dist.reduce_scatter(output_tensor, scatter_input, op=dist.ReduceOp.SUM)
-        sync_fn()
-        if print_each and i % 100 == 0:
-            print(f"[{rank}] reduce_scatter iteration {i}")
     sync_fn()
     end = time.time()
 
