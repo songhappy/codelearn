@@ -6,13 +6,13 @@ import os
 
 def get_device_and_backend():
     if torch.backends.mps.is_available():
-        return "mps", "gloo"  # Apple fallback
+        return "mps", "gloo"
     elif torch.cuda.is_available():
         return "cuda", "nccl"
     elif hasattr(torch, "xpu") and torch.xpu.is_available():
-        return "xpu", "xccl"  # Assumes PyTorch built with XPU backend (e.g., ccl or xccl)
+        return "xpu", "xccl"  # Replace with "gloo" if your torch doesn't support "xccl"
     else:
-        raise RuntimeError("No supported device found (CUDA or XPU required).")
+        raise RuntimeError("No supported device found.")
 
 def setup():
     rank = int(os.environ["RANK"])
@@ -30,6 +30,9 @@ def setup():
         device = torch.device("xpu", local_rank)
         torch.xpu.set_device(local_rank)
         sync_fn = torch.xpu.synchronize
+    elif device_type == "mps":
+        device = torch.device("mps")
+        sync_fn = lambda: None
     else:
         raise ValueError("Unsupported device type")
 
@@ -38,34 +41,53 @@ def setup():
 def cleanup():
     dist.destroy_process_group()
 
-def main(print_each=False):
-    device, device_type, sync_fn = setup()
-
-    rank = dist.get_rank()
-    world_size = dist.get_world_size()
-
-    # Allocate ~2 GiB float32 tensor per rank
+def benchmark_allgather(device, sync_fn, world_size, rank, print_each=False):
     input_tensor = torch.ones(536_870_912, device=device) * rank
     gathered = [torch.zeros_like(input_tensor) for _ in range(world_size)]
 
-    for i in range(20):
-        dist.all_gather(gathered, input_tensor)
-        sync_fn()
-    
     sync_fn()
-    start_time = time.time()
+    start = time.time()
     for i in range(1000):
         dist.all_gather(gathered, input_tensor)
         sync_fn()
         if print_each and i % 100 == 0:
-            print(f"[{rank}] Completed iteration {i}")
+            print(f"[{rank}] all_gather iteration {i}")
+    sync_fn()
+    end = time.time()
+
+    return end - start
+
+def benchmark_reducescatter(device, sync_fn, world_size, rank, print_each=False):
+    scatter_input = [torch.ones(536_870_912, device=device) * (rank + i) for i in range(world_size)]
+    output_tensor = torch.zeros_like(scatter_input[0])
 
     sync_fn()
-    end_time = time.time()
-    total_time = end_time - start_time
+    start = time.time()
+    for i in range(1000):
+        dist.reduce_scatter(output_tensor, scatter_input, op=dist.ReduceOp.SUM)
+        sync_fn()
+        if print_each and i % 100 == 0:
+            print(f"[{rank}] reduce_scatter iteration {i}")
+    sync_fn()
+    end = time.time()
+
+    return end - start
+
+def main(print_each=False):
+    device, device_type, sync_fn = setup()
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    # add warmup iterations
+    for _ in range(10):
+        dist.all_gather([torch.zeros(536_870_912, device=device) for _ in range(world_size)], torch.ones(536_870_912, device=device))
+        dist.reduce_scatter(torch.zeros(536_870_912, device=device), [torch.ones(536_870_912, device=device) * i for i in range(world_size)], op=dist.ReduceOp.SUM)
+
+    allgather_time = benchmark_allgather(device, sync_fn, world_size, rank, print_each)
+    reducescatter_time = benchmark_reducescatter(device, sync_fn, world_size, rank, print_each)
 
     if rank == 0:
-        print(f"\n[{rank}] Total time for 1000 all_gather calls: {total_time:.3f} seconds")
+        print(f"\n[{rank}] Total time for 1000 all_gather calls:     {allgather_time:.3f} seconds")
+        print(f"[{rank}] Total time for 1000 reduce_scatter calls: {reducescatter_time:.3f} seconds")
 
     cleanup()
 
