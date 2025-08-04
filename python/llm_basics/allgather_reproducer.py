@@ -48,9 +48,12 @@ def main(print_each=False):
     input_tensor = torch.ones(536_870_912, device=device) * rank
     gathered = [torch.zeros_like(input_tensor) for _ in range(world_size)]
 
+    for i in range(20):
+        dist.all_gather(gathered, input_tensor)
+        sync_fn()
+    
     sync_fn()
     start_time = time.time()
-
     for i in range(1000):
         dist.all_gather(gathered, input_tensor)
         sync_fn()
