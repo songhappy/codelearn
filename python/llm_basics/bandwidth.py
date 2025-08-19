@@ -1,81 +1,152 @@
-import torch
 import time
+import torch
 
-# Parameters
-def get_bandwidth(size_mb):
-    """Estimate the sustained memory bandwidth of the XPU.
-    This function allocates a large array, performs a copy operation,
-    and measures the time taken to estimate bandwidth.
+# --------------------------
+# Backend/Device Abstraction
+# --------------------------
+def pick_backend():
+    has_xpu  = hasattr(torch, "xpu") and torch.xpu.is_available()
+    has_cuda = torch.cuda.is_available()
+    if has_xpu:
+        return "xpu"
+    if has_cuda:
+        return "cuda"
+    return "cpu"
+
+BACKEND = pick_backend()
+
+def device():
+    if BACKEND == "xpu":
+        return torch.device("xpu")
+    if BACKEND == "cuda":
+        return torch.device("cuda")
+    return torch.device("cpu")
+
+def synchronize():
+    if BACKEND == "xpu":
+        torch.xpu.synchronize()
+    elif BACKEND == "cuda":
+        torch.cuda.synchronize()
+    else:
+        torch.cpu.synchronize() if hasattr(torch, "cpu") and hasattr(torch.cpu, "synchronize") else None
+
+def Stream():
+    if BACKEND == "xpu":
+        return torch.xpu.Stream()
+    if BACKEND == "cuda":
+        return torch.cuda.Stream()
+    # CPU has no streams; return a dummy object/context
+    class _NoopStream:
+        pass
+    return _NoopStream()
+
+def stream_ctx(stream):
+    if BACKEND == "xpu":
+        return torch.xpu.stream(stream)
+    if BACKEND == "cuda":
+        return torch.cuda.stream(stream)
+    # CPU: no-op context
+    from contextlib import contextmanager
+    @contextmanager
+    def _noop():
+        yield
+    return _noop()
+
+# --------------------------
+# Benchmarks
+# --------------------------
+@torch.no_grad()
+def get_bandwidth(size_mb: int, iters: int = 1000) -> float:
+    """
+    Estimate sustained device memory bandwidth (GB/s) via repeated device->device copies.
+    Works on XPU, CUDA, and CPU (for correctness).
     """
     MB = 1024 * 1024
-    num_elems = size_mb * MB // 4  # float32 = 4B
+    elem_bytes = 4  # float32
+    num_elems = size_mb * MB // elem_bytes
 
-    # Allocate
-    a = torch.rand(num_elems, device="xpu")
+    # Allocate on the selected device
+    dev = device()
+    a = torch.rand(num_elems, device=dev, dtype=torch.float32)
     b = torch.empty_like(a)
 
-    # Confirm dtype
     assert a.dtype == torch.float32
 
     # Warm-up
     for _ in range(5):
         b.copy_(a)
-    torch.xpu.synchronize()
+    synchronize()
 
     # Benchmark
-    N = 1000
     start = time.perf_counter()
-    for _ in range(N):
+    for _ in range(iters):
         b.copy_(a)
-    torch.xpu.synchronize()
+    synchronize()
     end = time.perf_counter()
 
-    # Compute bandwidth
-    bytes_transferred = 2 * a.numel() * 4 * N  # read + write
-    bandwidth_gbps = bytes_transferred / (end - start) / 1e9
-    return bandwidth_gbps
+    # read + write per copy
+    bytes_per_copy = 2 * a.numel() * a.element_size()
+    total_bytes = bytes_per_copy * iters
+    gbps = total_bytes / (end - start) / 1e9
+    return gbps
 
-def get_bandwidth_streams(size_mb):
+
+@torch.no_grad()
+def get_bandwidth_streams(size_mb: int, num_streams: int = 4, iters: int = 500) -> float:
+    """
+    Estimate sustained bandwidth using multiple concurrent streams.
+    On CPU (no streams), it behaves as a simple loop (no concurrency).
+    """
     MB = 1024 * 1024
-    num_elems = size_mb * MB // 4  # float32 = 4B
+    elem_bytes = 4  # float32
+    num_elems = size_mb * MB // elem_bytes
 
-    # Allocate multiple buffers
-    a_list = [torch.rand(num_elems, device="xpu") for _ in range(4)]
+    dev = device()
+    a_list = [torch.rand(num_elems, device=dev, dtype=torch.float32) for _ in range(num_streams)]
     b_list = [torch.empty_like(a) for a in a_list]
 
-    # Warm up
+    # Warm-up
     for a, b in zip(a_list, b_list):
         b.copy_(a)
-    torch.xpu.synchronize()
+    synchronize()
 
-    # Time many concurrent copies using streams
-    streams = [torch.xpu.Stream() for _ in range(4)]
-    N = 500
+    # Prepare streams (no-op on CPU)
+    streams = [Stream() for _ in range(num_streams)]
+
     start = time.perf_counter()
-
-    for _ in range(N):
-        for i in range(4):
-            with torch.xpu.stream(streams[i]):
+    for _ in range(iters):
+        for i in range(num_streams):
+            with stream_ctx(streams[i]):
                 b_list[i].copy_(a_list[i])
-    torch.xpu.synchronize()
-
+    synchronize()
     end = time.perf_counter()
 
-    # Total bytes = read + write × num tensors × N
-    total_bytes = 4 * 2 * num_elems * 4 * N
-    bw = total_bytes / (end - start) / 1e9
+    # total bytes = (#tensors) * (read+write per copy) * iters
+    bytes_per_copy = 2 * num_elems * elem_bytes
+    total_bytes = num_streams * bytes_per_copy * iters
+    gbps = total_bytes / (end - start) / 1e9
 
-    print(f"Pushed sustained memory bandwidth: {bw:.2f} GB/s")
+    print(f"[{BACKEND}] Streams ({num_streams}) sustained bandwidth: {gbps:.2f} GB/s")
+    # Also return single-stream estimate for comparison consistency (optional)
     return get_bandwidth(size_mb)
 
 
 if __name__ == "__main__":
+    print(f"Selected backend: {BACKEND}, device: {device()}")
 
-    size_mb =[512, 1024, 2048, 4096, 8192, 16384]  # Sizes in MB
+    # Sizes in MB (adjust if you hit OOM on your device)
+    sizes_mb = [512, 1024, 2048, 4096, 8192, 16384]
 
-    for size in size_mb:
-        bandwidth_gbps = get_bandwidth(size)
-        print(f"Estimated sustained memory bandwidth: {bandwidth_gbps:.2f} GB/s")
-    for size in size_mb:
-        bandwidth_gbps = get_bandwidth_streams(size)
-        print(f"Estimated sustained memory bandwidth (streams): {bandwidth_gbps:.2f} GB/s")
+    for size in sizes_mb:
+        try:
+            bw = get_bandwidth(size)
+            print(f"[{BACKEND}] Size {size:>6} MB | Sustained bandwidth: {bw:.2f} GB/s")
+        except RuntimeError as e:
+            print(f"[{BACKEND}] Size {size} MB | Skipped due to error: {e}")
+
+    for size in sizes_mb:
+        try:
+            bw_streams = get_bandwidth_streams(size)
+            print(f"[{BACKEND}] Size {size:>6} MB | Sustained bandwidth (streams): {bw_streams:.2f} GB/s")
+        except RuntimeError as e:
+            print(f"[{BACKEND}] Size {size} MB | Streams skipped due to error: {e}")
