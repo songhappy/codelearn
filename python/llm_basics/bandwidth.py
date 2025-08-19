@@ -66,8 +66,9 @@ def get_bandwidth_streams(size_mb):
     bw = total_bytes / (end - start) / 1e9
 
     print(f"Pushed sustained memory bandwidth: {bw:.2f} GB/s")
-
     return get_bandwidth(size_mb)
+
+
 if __name__ == "__main__":
 
     size_mb =[512, 1024, 2048, 4096, 8192, 16384]  # Sizes in MB
