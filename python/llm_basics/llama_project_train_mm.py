@@ -533,24 +533,35 @@ def print_out(spec, hw, train, dtypes):
 # ========================= example: LLaMA-3 8B, your HW =========================
 if __name__ == "__main__":
     # LLaMA-3 8B config (matches your printout)
-    spec = LlamaSpec(
+    spec8b = LlamaSpec(
         num_hidden_layers=32,
         hidden_size=4096,
         num_attention_heads=32,
-        num_key_value_heads=8,   # GQA: 8 KV heads → D_kv = 8*(4096/32)=1024
-        intermediate_size=14336, # r = 3.5
+        num_key_value_heads=8,    # GQA
+        intermediate_size=14336,
         vocab_size=128_256,
         tie_word_embeddings=False
     )
 
-    # Hardware (effective)
-    hw_1550 = HardwareSpec(
-        bandwidth_Bps_raw=1052e9, bandwidth_eff=1.0,   # measured
-        compute_Fps_raw=839e12,  compute_eff=0.9       # searched
+    spec = LlamaSpec(
+        num_hidden_layers=28,
+        hidden_size=3072,
+        num_attention_heads=24,
+        num_key_value_heads=8,    # GQA
+        intermediate_size=8192,
+        vocab_size=128_256,
+        tie_word_embeddings=False
     )
+
+    # -------- Hardware (PVC Max 1550 & A100) --------
+    hw_pvc1550 = HardwareSpec(
+        bandwidth_Bps_raw=1317e9, bandwidth_eff=1.0,   # searched 3276.8 GB/s HBM measured 1317e9
+        compute_Fps_raw=232e12,  compute_eff=1.0      # searched 839 TFLOP/s  measured 232e12
+    )
+    # GPU 0: NVIDIA A100-SXM4-40GB
     hw_a100 = HardwareSpec(
-        bandwidth_Bps_raw=1325e9, bandwidth_eff=1.0,
-        compute_Fps_raw=312e12,  compute_eff=0.9
+        bandwidth_Bps_raw=1278e9, bandwidth_eff=1.0,   # searched 1555 GB/s peak  measured 1278e9
+        compute_Fps_raw=229e12,  compute_eff=1.0       # searched 624 TFLOP/s  measured 229e12
     )
 
     # Dtypes (bf16 across the board → matches ~5909 tok/s case)
@@ -569,6 +580,6 @@ if __name__ == "__main__":
     )
 
     print("----------on pvc max 1550------------")
-    print_out(spec, hw_1550, train, dtypes)
+    print_out(spec, hw_pvc1550, train, dtypes)
     print("----------on a100------------")
     print_out(spec, hw_a100, train, dtypes)
