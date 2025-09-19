@@ -170,6 +170,7 @@ def _compute_bytes_and_time(spec: LlamaSpec, train: TrainSpec, hw: HardwareSpec,
     - Adds explicit SDPA training compute: F_sdpa_train = alpha * L * (4*D*S) * (B*S*G).
     - Weight I/O is microbatch-scaled: reads per FW+BW pass × grad_accum.
     """
+    
     P = spec.total_params
     L = spec.num_hidden_layers
     D = spec.hidden_size

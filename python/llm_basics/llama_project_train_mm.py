@@ -41,6 +41,7 @@ def gemm_bytes_token(M: int, K: int, N: int, b: int) -> float:
     r"""Per-token bytes = [2·(MK + KN + MN)·b] / M"""
     return gemm_bytes_step(M, K, N, b) / max(M, 1)
 
+
 # ---------- dtype bytes ----------
 @dataclass(frozen=True)
 class DTypeBytes:
