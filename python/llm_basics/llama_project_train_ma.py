@@ -1,4 +1,4 @@
-# llama_project_train_ma.py
+# llama_project_train_ma.py (used)
 # ---------------------------------------------------------------------------
 # Training throughput projector (model-size methodology) for a LLaMA-3 8B–style model.
 # Adds explicit SDPA (attention) compute with an alpha multiplier for training (FW+BW, ckpt).
@@ -29,7 +29,6 @@
 #     but this script accounts checkpointing primarily in compute (flops), not bytes.
 #
 # PRINT NOTE:
-#   You asked for a SINGLE overall control line (compute vs memory) for the whole step.
 #   We compute:
 #       t_compute_total = (F_train_total + F_adam) / T
 #       t_memory_total  = (bytes_fwbw + bytes_opt) / B
@@ -171,6 +170,7 @@ def _compute_bytes_and_time(spec: LlamaSpec, train: TrainSpec, hw: HardwareSpec,
     - Adds explicit SDPA training compute: F_sdpa_train = alpha * L * (4*D*S) * (B*S*G).
     - Weight I/O is microbatch-scaled: reads per FW+BW pass × grad_accum.
     """
+    
     P = spec.total_params
     L = spec.num_hidden_layers
     D = spec.hidden_size
