@@ -37,7 +37,7 @@ def train(rank, world_size, distributed):
     # Profiler setup
     prof = profile(
         activities=[ProfilerActivity.XPU,
-                    ProfilerActivity.CPU,
+                    ProfilerActivity.CPU, 
                     ],
         on_trace_ready=tensorboard_trace_handler(f'./log/rank{rank}'),
         record_shapes=True,
@@ -54,7 +54,7 @@ def train(rank, world_size, distributed):
         loss.backward()
         optimizer.step()
         torch.xpu.synchronize()
-        if idx == 6:
+        if idx == 18:
             prof.step()
     try:
         prof.stop()
