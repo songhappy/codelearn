@@ -1,0 +1,92 @@
+# fsdp_tp.py
+# torchrun --nproc_per_node 4 python/ddp/fsdp_tp.py
+import os
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.distributed as dist
+from torch.utils.data import DataLoader, TensorDataset
+
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.tensor.parallel import (
+    parallelize_module,
+    ColwiseParallel,
+    RowwiseParallel,
+)
+from torch.distributed.device_mesh import init_device_mesh
+
+
+class ToyModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear1 = nn.Linear(1024, 128)
+        self.relu = nn.ReLU()
+        self.linear2 = nn.Linear(128, 256)
+
+    def forward(self, x):
+        return self.linear2(self.relu(self.linear1(x)))
+
+
+def create_dataloader(rank, world_size, batch_size=32, device="cuda"):
+    x = torch.randn(1000, 1024, device=device)
+    y = torch.randint(0, 256, (1000,), device=device)
+    dataset = TensorDataset(x, y)
+    sampler = torch.utils.data.distributed.DistributedSampler(
+        dataset, num_replicas=world_size, rank=rank
+    )
+    return DataLoader(dataset, batch_size=batch_size, sampler=sampler)
+
+
+def train(rank, world_size, local_rank):
+    dist.init_process_group("nccl" if torch.cuda.is_available() else "xccl",  # "ccl" for Intel XPU backend
+                            rank=rank, world_size=world_size)
+
+    device_type = "cuda" if torch.cuda.is_available() else "xpu"
+    device = torch.device(device_type, local_rank)
+    torch._dynamo.config.suppress_errors = True  # Optional: avoids compile-time issues
+
+    # Create 2D mesh with named dimensions
+    mesh_2d = init_device_mesh(device_type, (2, 2), mesh_dim_names=["dp", "tp"])
+    tp_mesh = mesh_2d["tp"]
+    dp_mesh = mesh_2d["dp"]
+
+    model = ToyModel().to(device)
+    tp_plan = {
+        'linear1': ColwiseParallel(),
+        'linear2': RowwiseParallel()
+    }
+
+    model = parallelize_module(model, tp_mesh, tp_plan)
+    model = FSDP(model, device_mesh=dp_mesh, use_orig_params=True)
+
+    dataloader = create_dataloader(rank, world_size, device=device)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    loss_fn = nn.CrossEntropyLoss()
+
+    for epoch in range(5):
+        model.train()
+        total_loss = 0
+        for x, y in dataloader:
+            out = model(x)
+            loss = loss_fn(out, y)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+
+        if dist.get_rank() == 0:
+            print(f"[Epoch {epoch+1}] Loss: {total_loss:.4f}")
+
+    dist.destroy_process_group()
+
+
+def main():
+    rank = int(os.environ["RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+    local_rank = int(os.environ["LOCAL_RANK"])
+    train(rank, world_size, local_rank)
+
+
+if __name__ == "__main__":
+    main()
