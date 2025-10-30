@@ -1,4 +1,4 @@
-# torchrun --nproc_per_node 8 fsdp_pp.py
+# torchrun --nproc_per_node 8 fsdp2_pp.py
 # nohup nvidia-smi -l 1 --query-gpu=memory.used,memory.free,memory.total --format=csv > /home/songhappy/git/codelearn/python/ddp/memo.txt 2>&1 &
 
 # Topology: DP = 4, PP = 2  (world_size = DP * PP = 8)
@@ -20,7 +20,7 @@
 # - Data is partitioned by DP rows (¼ each). Only Stage 0 ranks load inputs/targets; Stage 1 ranks just participate in the pipeline.
 # - Each rank holds only a shard of ITS STAGE’S parameters (due to FSDP2); it does NOT hold weights from other stages.
 # fsdp_pp.py
-# torchrun --nproc_per_node 8 fsdp_pp.py
+# torchrun --nproc_per_node 8 fsdp2_pp.py
 # (same topology & comments as your original)
 
 import os

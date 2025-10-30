@@ -1,103 +1,56 @@
-# Minimal 2-stage pipeline parallelism (PyTorch pipelining APIs)
-# Run: torchrun --nproc_per_node 2 pp.py
+# python pp.py
+# Minimal pipeline parallel demo: 2 stages, 2 micro-batches, CPU+Gloo.
 
-import os
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import torch.distributed as dist
-from torch.utils.data import DataLoader, TensorDataset
-from torch.distributed.pipelining import pipeline, SplitPoint, ScheduleGPipe
+import torch.multiprocessing as mp
+from torch.distributed.pipelining import PipelineStage, ScheduleGPipe
 
-class ToyModel(nn.Module):
-    def __init__(self):
+WORLD_SIZE = 2     # 2 stages (ranks 0 and 1)
+D = 4              # feature dim
+BATCH = 4          # mini-batch per step
+CHUNKS = 2         # micro-batches -> micro-batch size = 2
+
+class Block(nn.Module):
+    def __init__(self, d):
         super().__init__()
-        self.stage0 = nn.Sequential(nn.Linear(1024, 128), nn.ReLU())
-        self.stage1 = nn.Linear(128, 256)  # logits
+        self.net = nn.Sequential(nn.Linear(d, d), nn.ReLU(), nn.Linear(d, d))
+    def forward(self, x): return self.net(x)
 
-    def forward(self, x):
-        x = self.stage0(x)
-        return self.stage1(x)
-
-def make_dataloader(device, batch_size=32, total_samples=1024):
-    x = torch.randn(total_samples, 1024, device=device)
-    y = torch.randint(0, 256, (total_samples,), device=device)
-    return DataLoader(TensorDataset(x, y), batch_size=batch_size, shuffle=False, drop_last=False)
-
-def main():
-    rank = int(os.environ["RANK"])
-    world_size = int(os.environ["WORLD_SIZE"])
-    local_rank = int(os.environ["LOCAL_RANK"])
-    assert world_size == 2, "This minimal example assumes exactly 2 ranks (2 pipeline stages)."
-
-    # Backend / device init (CUDA -> NCCL; otherwise XPU -> XCCL)
-    backend = "nccl" if torch.cuda.is_available() else "xccl"
-    dist.init_process_group(backend=backend, rank=rank, world_size=world_size)
-
-    device_type = "cuda" if torch.cuda.is_available() else "xpu"
-    device = torch.device(device_type, local_rank)
-    if device_type == "cuda":
-        torch.cuda.set_device(local_rank)
-    else:
-        if hasattr(torch, "xpu") and hasattr(torch.xpu, "set_device"):
-            torch.xpu.set_device(local_rank)
-
-    torch.manual_seed(0)
-
-    # Build the full model on each rank
-    model = ToyModel().to(device)
-
-    # Declare split & capture shapes with an example micro-batch
-    # Split BEFORE stage1 => rank0 runs stage0; rank1 runs stage1
-    example_mb = torch.randn(8, 1024, device=device)
-    pipe = pipeline(
-        module=model,
-        mb_args=(example_mb,),
-        split_spec={"stage1": SplitPoint.BEGINNING},
+def run(rank, world_size):
+    dist.init_process_group(
+        backend="xccl", init_method="tcp://127.0.0.1:29500",
+        rank=rank, world_size=world_size
     )
+    device = torch.device("xpu")
 
-    # Build local stage runtime (use positional args for wider compatibility)
-    stage = pipe.build_stage(rank, device, dist.group.WORLD)
+    # Each rank holds one stage of the model (stage0 -> stage1).
+    torch.manual_seed(0)                          # deterministic init on all ranks
+    stage_mod = Block(D).to(device)               # one block per stage
 
-    # Only the INPUT stage (rank 0) computes loss; others pass None
-    loss_fn = nn.CrossEntropyLoss() if rank == 0 else None
-    schedule = ScheduleGPipe(stage=stage, n_microbatches=4, loss_fn=loss_fn)
+    # Build the pipeline stage and schedule.
+    stage = PipelineStage(stage_mod, rank, world_size, device)
+    schedule = ScheduleGPipe(stage, CHUNKS, loss_fn=nn.MSELoss(reduction="sum"))
 
-    # Optimizer over the original model (portable across wheels)
-    opt = optim.Adam(model.parameters(), lr=1e-3)
-
-    # Dataloader only on rank0; rank1 matches the step count to avoid hangs
-    EPOCHS = 2
-    BATCH_SIZE = 32
-    TOTAL_SAMPLES = 1024
-
-    if rank == 0:
-        loader = make_dataloader(device, batch_size=BATCH_SIZE, total_samples=TOTAL_SAMPLES)
-        steps = len(loader)
-        steps_tensor = torch.tensor([steps], dtype=torch.int64, device=device)
-        dist.broadcast(steps_tensor, src=0)
-    else:
-        steps_tensor = torch.tensor([0], dtype=torch.int64, device=device)
-        dist.broadcast(steps_tensor, src=0)
-        steps = int(steps_tensor.item())
-
-    for epoch in range(EPOCHS):
-        if rank == 0:
-            for xb, yb in loader:
-                opt.zero_grad(set_to_none=True)
-                # Input stage provides inputs + targets
-                schedule.step(xb, target=yb)
-                opt.step()
-            print(f"[Epoch {epoch+1}] rank0 done")
-        else:
-            for _ in range(steps):
-                opt.zero_grad(set_to_none=True)
-                # Non-input stage participates without inputs/targets
-                schedule.step()
-                opt.step()
+    # Prepare input/target: rank0 feeds x; last rank feeds target for loss.
+    x = torch.randn(BATCH, D) if rank == 0 else None
+    target = torch.randn(BATCH, D) if rank == world_size - 1 else None
 
     dist.barrier()
+    # One pipelined training step:
+    if rank == 0:
+        schedule.step(x)                   # feed input
+    elif rank == world_size - 1:
+        schedule.step(target=target)       # provide target for loss/backward
+    else:
+        schedule.step()                    # middle stages just run
+    dist.barrier()
+
     dist.destroy_process_group()
+
+def main():
+    mp.spawn(run, args=(WORLD_SIZE,), nprocs=WORLD_SIZE, join=True)
 
 if __name__ == "__main__":
     main()
