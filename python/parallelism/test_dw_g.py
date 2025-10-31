@@ -122,6 +122,7 @@ def run(rank, world_size):
         device = torch.device(f"cuda:{rank}")
     if torch.xpu.is_available():
         backend = "xccl"
+        torch.xpu.set_device(rank)  # pin device
         device = torch.device(f"xpu:{rank}")
     dist.init_process_group(
         backend=backend,  # use "nccl" if CUDA instead of XPU

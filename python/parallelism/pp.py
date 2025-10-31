@@ -45,10 +45,13 @@ class MultiMLP(torch.nn.Module):
 def run(rank, world_size):
     if torch.cuda.is_available():
         backend = "nccl"
+        torch.cuda.set_device(rank)  # pin device
         device = torch.device(f"cuda:{rank}")
     if torch.xpu.is_available():
         backend = "xccl"
+        torch.xpu.set_device(rank)  # pin device
         device = torch.device(f"xpu:{rank}")
+
     dist.init_process_group(
         backend=backend, init_method="tcp://127.0.0.1:29500",
         rank=rank, world_size=world_size
