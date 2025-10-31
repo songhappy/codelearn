@@ -17,11 +17,7 @@ from torch.distributed.pipelining import PipelineStage, ScheduleGPipe
 d_hid = 8
 batch_size = 128
 chunks = 8
-
-def _get_chunks_and_batch(world_size: int) -> tuple[int, int]:
-    chunks_local = max(chunks, world_size)
-    batch_size_local = max(batch_size, chunks_local)
-    return chunks_local, batch_size_local
+torch.manual_seed(0)
 
 class MLPModule(torch.nn.Module):
     def __init__(self, d_hid: int):
@@ -55,10 +51,9 @@ def dw_g(rank, world_size, device):
     full_mod.to(device)
     stage_mod = full_mod.get_submodule(f"layers.{rank}")
 
-    chunks_local, batch_size_local = _get_chunks_and_batch(world_size)
 
-    x = torch.randn(batch_size_local, d_hid, device=device)
-    target = torch.randn(batch_size_local, d_hid, device=device)
+    x = torch.randn(batch_size, d_hid, device=device)
+    target = torch.randn(batch_size, d_hid, device=device)
 
     class CustomState:
         def __init__(self) -> None:
@@ -88,7 +83,7 @@ def dw_g(rank, world_size, device):
 
     # Attach to a schedule
     schedule = ScheduleGPipe(
-        stage, chunks_local, loss_fn=torch.nn.MSELoss(reduction="sum")
+        stage, chunks, loss_fn=torch.nn.MSELoss(reduction="sum")
     )
     dist.barrier()
 
@@ -110,27 +105,30 @@ def dw_g(rank, world_size, device):
 
 
     print("---------")
-    print(rank, cs.i, chunks_local)
-    assert cs.i == chunks_local, f"dw_builder ran {cs.i} times, expected {chunks_local}"
+    print(rank, cs.i, chunks)
+    assert cs.i == chunks, f"dw_builder ran {cs.i} times, expected {chunks}"
 
-    # # Last rank checks result
-    # if rank == world_size - 1:
-    #     ref_out = full_mod(x)
-    #     print(ref_out)
-    #     torch.testing.assert_close(out, ref_out)
-    # dist.barrier()
+    # Last rank checks result
+    if rank == world_size - 1:
+        ref_out = full_mod(x)
+        print(ref_out)
+        torch.testing.assert_close(out, ref_out)
+    dist.barrier()
 
 def run(rank, world_size):
     # Initialize the process group
+    if torch.cuda.is_available():
+        backend = "nccl"
+        device = torch.device(f"cuda:{rank}")
+    if torch.xpu.is_available():
+        backend = "xccl"
+        device = torch.device(f"xpu:{rank}")
     dist.init_process_group(
-        backend="xccl",  # use "nccl" if CUDA instead of XPU
+        backend=backend,  # use "nccl" if CUDA instead of XPU
         init_method="tcp://127.0.0.1:29500",
         rank=rank,
         world_size=world_size
     )
-
-    torch.xpu.set_device(rank)
-    device = torch.device("xpu", rank)
 
     dw_g(rank, world_size, device)
 
