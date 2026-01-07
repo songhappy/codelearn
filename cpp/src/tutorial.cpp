@@ -171,7 +171,8 @@ void  demonstratePolymorphism() {
     Dog dog;    // Object creation
     Cat cat;    // Object creation
     animal = &dog;    // Pointer to derived class
-    animal->sound();    // Call to derived class method
+    animal->sound();    // Call to derived class method animal.sound() means “call sound on the object named animal” 
+                        //animal->sound() means “call sound on the object that animal points to”
     animal = &cat;    // Pointer to derived class
     animal->sound();    // Call to derived class method
 }
